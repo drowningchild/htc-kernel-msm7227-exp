@@ -53,9 +53,6 @@ extern void rcu_barrier_sched(void);
 extern void synchronize_sched_expedited(void);
 extern int sched_expedited_torture_stats(char *page);
 
-/* Internal to kernel */
-extern void rcu_init(void);
-
 #if defined(CONFIG_TREE_RCU) || defined(CONFIG_TREE_PREEMPT_RCU)
 #include <linux/rcutree.h>
 #elif defined(CONFIG_TINY_RCU) || defined(CONFIG_TINY_PREEMPT_RCU)
