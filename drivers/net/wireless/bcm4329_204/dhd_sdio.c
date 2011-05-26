@@ -5642,7 +5642,6 @@ dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
 {
 	int bcmerror = 0;
 	dhd_bus_t *bus;
-	int res = 0;
 
 	bus = dhdp->bus;
 
@@ -5653,13 +5652,10 @@ dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
 			dhd_txflowcontrol(bus->dhd, 0, ON);
 #endif /* !defined(IGNORE_ETH0_DOWN) */
 			/* save country settinng if was pre-setup with priv ioctl */
-			if ((res = dhd_os_proto_block(dhdp) == -1)) {
-				DHD_ERROR(("%s: down proto_sem timeout \n", __FUNCTION__));
-			}
+			dhd_os_proto_block(dhdp);
 			dhdcdc_query_ioctl(bus->dhd, 0, WLC_GET_COUNTRY,
 				bus->dhd->country_code, sizeof(bus->dhd->country_code));
-			if (!res)
-				dhd_os_proto_unblock(dhdp);
+			dhd_os_proto_unblock(dhdp);
 			/* Expect app to have torn down any connection before calling */
 			/* Stop the bus, disable F2 */
 			dhd_bus_stop(bus, FALSE);

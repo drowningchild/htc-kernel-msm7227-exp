@@ -1,3 +1,5 @@
+if BCM4329_PURE_ANDROID
+
 config BCM4329
 	tristate "Broadcom 4329 wireless cards support"
 	depends on MMC
@@ -26,17 +28,4 @@ config BCM4329_NVRAM_PATH
 	---help---
 	  Path to the calibration file.
 
-config BCM4329_ENABLE_CSCAN
-	depends on BCM4329
-	bool "Enable CSCAN"
-	default n
-	---help---
-	  Enable the use of CSCAN methods.
-
-config BCM4329_ALLOW_ARP
-	depends on BCM4329
-	bool "Allow ARP requests"
-	default n
-	---help---
-	  Allow ARP requests to be received by the cpu while in low
-	  power mode.
+endif #BCM4329_PURE_ANDROID

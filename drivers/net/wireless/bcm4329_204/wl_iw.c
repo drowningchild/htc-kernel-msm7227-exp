@@ -2835,6 +2835,46 @@ wl_iw_mlme(
 }
 #endif
 
+void wl_iw_force_deauth(void)
+{
+    if(FALSE == ap_cfg_running)
+    {
+	int error  = -EINVAL;
+        scb_val_t scbval;
+        uint32 reason_code = 3;
+        struct sockaddr wapaddr;
+        uint8 cnt = 0;
+	uint8 maclen;
+        wapaddr.sa_family = ARPHRD_ETHER;
+        memset(&wapaddr.sa_data, 0, ETHER_ADDR_LEN);
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
+        rtnl_lock();
+#endif
+	(void) dev_wlc_ioctl(priv_dev, WLC_GET_BSSID, &wapaddr.sa_data, ETHER_ADDR_LEN);
+     
+        for(maclen = 0; maclen < ETHER_ADDR_LEN; maclen++)
+	    cnt = wapaddr.sa_data[maclen];
+      if(cnt)
+      {
+           scbval.val = reason_code;
+           bcopy(&wapaddr.sa_data, &scbval.ea, ETHER_ADDR_LEN);
+           scbval.val = htod32(scbval.val);
+           error = dev_wlc_ioctl(priv_dev, WLC_SCB_DEAUTHENTICATE_FOR_REASON, &scbval, sizeof(scb_val_t));
+           WL_TRACE(("%s Send WLC_SCB_DEAUTHENTICATE.\n",__FUNCTION__));
+      }
+      else
+      {
+           WL_TRACE(("%s Skip send WLC_SCB_DEAUTHENTICATE.\n",__FUNCTION__));
+      }
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
+        rtnl_unlock();
+#endif
+    }
+
+}
+
 static int
 wl_iw_get_aplist(
 	struct net_device *dev,
@@ -4339,10 +4379,9 @@ wl_iw_get_scan(
 	if ((error = dev_wlc_ioctl(dev, WLC_SCAN_RESULTS, list, len))) {
 		WL_ERROR(("%s: %s : Scan_results ERROR %d\n", dev->name, __FUNCTION__, len));
 		dwrq->length = len;
-		if (g_scan_specified_ssid){
-			g_scan_specified_ssid = 0;
+		if (g_scan_specified_ssid)
 			kfree(list);
-		}
+		wl_iw_fixed_scan(dev);
 		return 0;
 	}
 	list->buflen = dtoh32(list->buflen);
@@ -9059,13 +9098,7 @@ static int ap_fail_count = 0;
 static int
 _ap_protect_sysioc_thread(void *data)
 {
-#if 0
 	int isup;
-#else
-	char iovbuf[WL_EVENTING_MASK_LEN + 12]; /* Room for "event_msgs" + '\0' + bitvec */
-	static unsigned int txphyerr = 0;
-	unsigned int curr_txphyerr = 0;
-#endif
 	int ret = 0;
 	DAEMONIZE("ap_sysioc");
 
@@ -9081,32 +9114,14 @@ _ap_protect_sysioc_thread(void *data)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
 	rtnl_lock();
 #endif
-#if 0
 		if ((ret = dev_wlc_ioctl(priv_dev, WLC_GET_UP, &isup, sizeof(isup))) != 0)
 				ap_fail_count++;
 		else
 				ap_fail_count = 0;
-#else
-		strcpy(iovbuf, "txphyerr");
-		if ((ret = dev_wlc_ioctl(priv_dev, WLC_GET_VAR, iovbuf, sizeof(iovbuf))) < 0)
-			ap_fail_count++;
-		else {
-			curr_txphyerr = *(unsigned int*)iovbuf;
-			//myprintf("%s: curr_txphyerr(%d)/txphyerr(%d)\n", __FUNCTION__, curr_txphyerr, txphyerr);
-			if ( (curr_txphyerr - txphyerr) > 5000  ) {
-				myprintf("%s: curr_txphyerr(%d) is over txphyerr (%d). fail count + 1\n", __FUNCTION__, curr_txphyerr, txphyerr);
-				ap_fail_count++;
-			} else {
-				ap_fail_count = 0;
-			}
-			txphyerr = curr_txphyerr;
-		}
-#endif
 
 		if (ap_fail_count == AP_MAX_FAIL_COUNT) {
 			wl_iw_restart(priv_dev);
 			wl_iw_ap_restart();
-			txphyerr = 0;
 		}
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))

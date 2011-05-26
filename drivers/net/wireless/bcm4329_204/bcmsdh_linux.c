@@ -611,12 +611,6 @@ void bcmsdh_unregister_oob_intr(void)
 	set_irq_wake(sdhcinfo->oob_irq, 0);
 	disable_irq(sdhcinfo->oob_irq);	/* just in case.. */
 	free_irq(sdhcinfo->oob_irq, NULL);
-
-	// free device private data
-	if (sdhcinfo->dev->p) {
-		kfree(sdhcinfo->dev->p);
-		sdhcinfo->dev->p = NULL;
-	}
 }
 
 void bcmsdh_oob_intr_set(bool enable)

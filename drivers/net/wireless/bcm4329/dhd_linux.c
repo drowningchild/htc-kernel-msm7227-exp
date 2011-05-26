@@ -3,7 +3,6 @@
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
  * Copyright (C) 1999-2010, Broadcom Corporation
- * Copyright (C) 2011, The CyanogenMod Project
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -23,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_linux.c,v 1.65.4.9.2.12.2.104.4.35 2010/11/17 03:13:21 Exp $
+ * $Id: dhd_linux.c,v 1.65.4.9.2.12.2.104.4.40 2011/02/03 19:55:18 Exp $
  */
 
 #ifdef CONFIG_WIFI_CONTROL_FUNC
@@ -44,10 +43,9 @@
 #include <linux/ethtool.h>
 #include <linux/fcntl.h>
 #include <linux/fs.h>
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-#include <linux/if_addr.h>
 #include <linux/inetdevice.h>
-#endif
+#include <linux/mutex.h>
+#include <linux/sched.h>
 
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
@@ -67,13 +65,13 @@
 #include <linux/wakelock.h>
 #endif
 #if defined(CUSTOMER_HW2) && defined(CONFIG_WIFI_CONTROL_FUNC)
-#include <linux/wifi_bcm.h>
+#include <linux/wlan_plat.h>
 
 struct semaphore wifi_control_sem;
 
 struct dhd_bus *g_bus;
 
-static struct bcm_wifi_platform_data *wifi_control_data = NULL;
+static struct wifi_platform_data *wifi_control_data = NULL;
 static struct resource *wifi_irqres = NULL;
 
 int wifi_get_irq_number(unsigned long *irq_flags_ptr)
@@ -131,10 +129,21 @@ int wifi_get_mac_addr(unsigned char *buf)
 	return -EOPNOTSUPP;
 }
 
+void *wifi_get_country_code(char *ccode)
+{
+	DHD_TRACE(("%s\n", __FUNCTION__));
+	if (!ccode)
+		return NULL;
+	if (wifi_control_data && wifi_control_data->get_country_code) {
+		return wifi_control_data->get_country_code(ccode);
+	}
+	return NULL;
+}
+
 static int wifi_probe(struct platform_device *pdev)
 {
-	struct bcm_wifi_platform_data *wifi_ctrl =
-		(struct bcm_wifi_platform_data *)(pdev->dev.platform_data);
+	struct wifi_platform_data *wifi_ctrl =
+		(struct wifi_platform_data *)(pdev->dev.platform_data);
 
 	DHD_TRACE(("## %s\n", __FUNCTION__));
 	wifi_irqres = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "bcm4329_wlan_irq");
@@ -149,8 +158,8 @@ static int wifi_probe(struct platform_device *pdev)
 
 static int wifi_remove(struct platform_device *pdev)
 {
-	struct bcm_wifi_platform_data *wifi_ctrl =
-		(struct bcm_wifi_platform_data *)(pdev->dev.platform_data);
+	struct wifi_platform_data *wifi_ctrl =
+		(struct wifi_platform_data *)(pdev->dev.platform_data);
 
 	DHD_TRACE(("## %s\n", __FUNCTION__));
 	wifi_control_data = wifi_ctrl;
@@ -195,6 +204,12 @@ void wifi_del_dev(void)
 }
 #endif /* defined(CUSTOMER_HW2) && defined(CONFIG_WIFI_CONTROL_FUNC) */
 
+static int dhd_device_event(struct notifier_block *this, unsigned long event,
+				void *ptr);
+
+static struct notifier_block dhd_notifier = {
+	.notifier_call = dhd_device_event
+};
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_PM_SLEEP)
 #include <linux/suspend.h>
@@ -259,7 +274,7 @@ typedef struct dhd_info {
 	/* OS/stack specifics */
 	dhd_if_t *iflist[DHD_MAX_IFS];
 
-	struct semaphore proto_sem;
+	struct mutex proto_sem;
 	wait_queue_head_t ioctl_resp_wait;
 	struct timer_list timer;
 	bool wd_timer_valid;
@@ -270,7 +285,7 @@ typedef struct dhd_info {
 
 	/* Thread based operation */
 	bool threads_only;
-	struct semaphore sdsem;
+	struct mutex sdsem;
 	long watchdog_pid;
 	struct semaphore watchdog_sem;
 	struct completion watchdog_exited;
@@ -304,11 +319,6 @@ typedef struct dhd_info {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif /* CONFIG_HAS_EARLYSUSPEND */
-
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-	__be32 in_address;
-	int filter_enabled;
-#endif
 } dhd_info_t;
 
 /* Definitions to provide path to the firmware and nvram
@@ -515,55 +525,9 @@ extern int register_pm_notifier(struct notifier_block *nb);
 extern int unregister_pm_notifier(struct notifier_block *nb);
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_PM_SLEEP) */
 
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-static int dhd_inetaddr_event(struct notifier_block *this, unsigned long event, void *arg);
-
-static struct notifier_block dhd_inetaddr_notifier = {
-	.notifier_call = dhd_inetaddr_event,
-};
-
-#define ARP_FILTER_MASK \
-	"ffffffffffff" \
-	"000000000000" \
-	"ffff" \
-	"ffff" \
-	"ffff" \
-	"ff" \
-	"ff" \
-	"ffff" \
-	"000000000000" \
-	"00000000" \
-	"000000000000" \
-	"ffffffff"
-#define ARP_FILTER_PATTERN \
-	"ffffffffffff" \
-	"000000000000" \
-	"0806" \
-	"0001" \
-	"0800" \
-	"06" \
-	"04" \
-	"0001" \
-	"000000000000" \
-	"00000000" \
-	"000000000000" \
-	"????????"
-#endif
-
 static void dhd_set_packet_filter(int value, dhd_pub_t *dhd)
 {
 #ifdef PKT_FILTER_SUPPORT
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-	char arp4_filter[] =
-		"101 0 0 0 0x"ARP_FILTER_MASK " 0x"ARP_FILTER_PATTERN;
-
-	char *ipv4_address;
-
-	dhd_info_t *dhdi = (dhd_info_t *)dhd->info;
-
-	dhdi->filter_enabled = FALSE;
-#endif
-
 	DHD_TRACE(("%s: %d\n", __FUNCTION__, value));
 	/* 1 - Enable packet filter, only allow unicast packet to send up */
 	/* 0 - Disable packet filter */
@@ -575,16 +539,6 @@ static void dhd_set_packet_filter(int value, dhd_pub_t *dhd)
 			dhd_pktfilter_offload_enable(dhd, dhd->pktfilter[i],
 					value, dhd_master_mode);
 		}
-
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-		ipv4_address = strchr(arp4_filter, '?');
-
-		snprintf(ipv4_address, 9, "%08x", be32_to_cpu(dhdi->in_address));
-		dhd_pktfilter_offload_set(dhd, arp4_filter);
-		dhd_pktfilter_offload_enable(dhd, arp4_filter, value, dhd_master_mode);
-
-		dhdi->filter_enabled = value;
-#endif
 	}
 #endif
 }
@@ -829,13 +783,13 @@ _dhd_set_multicast_list(dhd_info_t *dhd, int ifidx)
 	ASSERT(dhd && dhd->iflist[ifidx]);
 	dev = dhd->iflist[ifidx]->net;
 
-	netif_addr_lock_bh(dev);
+	NETIF_ADDR_LOCK(dev);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
 	cnt = netdev_mc_count(dev);
 #else
 	cnt = dev->mc_count;
 #endif
-	netif_addr_unlock_bh(dev);
+	NETIF_ADDR_UNLOCK(dev);
 
 	/* Determine initial value of allmulti flag */
 	allmulti = (dev->flags & IFF_ALLMULTI) ? TRUE : FALSE;
@@ -855,7 +809,7 @@ _dhd_set_multicast_list(dhd_info_t *dhd, int ifidx)
 	memcpy(bufp, &cnt, sizeof(cnt));
 	bufp += sizeof(cnt);
 
-	netif_addr_lock_bh(dev);
+	NETIF_ADDR_LOCK(dev);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
 	netdev_for_each_mc_addr(ha, dev) {
 		if (!cnt)
@@ -865,12 +819,12 @@ _dhd_set_multicast_list(dhd_info_t *dhd, int ifidx)
 		cnt--;
 	}
 #else
-	for (mclist = dev->mc_list;(mclist && (cnt > 0)); cnt--, mclist = mclist->next) {
+	for (mclist = dev->mc_list; (mclist && (cnt > 0)); cnt--, mclist = mclist->next) {
 		memcpy(bufp, (void *)mclist->dmi_addr, ETHER_ADDR_LEN);
 		bufp += ETHER_ADDR_LEN;
 	}
 #endif
-	netif_addr_unlock_bh(dev);
+	NETIF_ADDR_UNLOCK(dev);
 
 	memset(&ioc, 0, sizeof(ioc));
 	ioc.cmd = WLC_SET_VAR;
@@ -2070,6 +2024,7 @@ dhd_del_if(dhd_info_t *dhd, int ifidx)
 	up(&dhd->sysioc_sem);
 }
 
+
 dhd_pub_t *
 dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 {
@@ -2124,7 +2079,7 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 	net->netdev_ops = NULL;
 #endif
 
-	init_MUTEX(&dhd->proto_sem);
+	mutex_init(&dhd->proto_sem);
 	/* Initialize other structure content */
 	init_waitqueue_head(&dhd->ioctl_resp_wait);
 	init_waitqueue_head(&dhd->ctrl_wait);
@@ -2144,10 +2099,6 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 #endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25))
 	mutex_init(&dhd->wl_start_lock);
-#endif
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-	dhd->in_address = cpu_to_be32(0);
-	dhd->filter_enabled = FALSE;
 #endif
 	/* Link to info module */
 	dhd->pub.info = dhd;
@@ -2175,7 +2126,7 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 	dhd->timer.function = dhd_watchdog;
 
 	/* Initialize thread based operation and lock */
-	init_MUTEX(&dhd->sdsem);
+	mutex_init(&dhd->sdsem);
 	if ((dhd_watchdog_prio >= 0) && (dhd_dpc_prio >= 0)) {
 		dhd->threads_only = TRUE;
 	}
@@ -2223,16 +2174,14 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 	register_pm_notifier(&dhd_sleep_pm_notifier);
 #endif /*  (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_PM_SLEEP) */
 
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-	register_inetaddr_notifier(&dhd_inetaddr_notifier);
-#endif
-
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	dhd->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 20;
 	dhd->early_suspend.suspend = dhd_early_suspend;
 	dhd->early_suspend.resume = dhd_late_resume;
 	register_early_suspend(&dhd->early_suspend);
 #endif
+
+	register_inetaddr_notifier(&dhd_notifier);
 
 	return &dhd->pub;
 
@@ -2244,6 +2193,7 @@ fail:
 
 	return NULL;
 }
+
 
 int
 dhd_bus_start(dhd_pub_t *dhdp)
@@ -2258,12 +2208,15 @@ dhd_bus_start(dhd_pub_t *dhdp)
 
 	DHD_TRACE(("%s: \n", __FUNCTION__));
 
+	dhd_os_sdlock(dhdp);
+
 	/* try to download image and nvram to the dongle */
 	if  (dhd->pub.busstate == DHD_BUS_DOWN) {
 		if (!(dhd_bus_download_firmware(dhd->pub.bus, dhd->pub.osh,
 		                                fw_path, nv_path))) {
 			DHD_ERROR(("%s: dhdsdio_probe_download failed. firmware = %s nvram = %s\n",
 			           __FUNCTION__, fw_path, nv_path));
+			dhd_os_sdunlock(dhdp);
 			return -1;
 		}
 	}
@@ -2273,8 +2226,9 @@ dhd_bus_start(dhd_pub_t *dhdp)
 	dhd_os_wd_timer(&dhd->pub, dhd_watchdog_ms);
 
 	/* Bring up the bus */
-	if ((ret = dhd_bus_init(&dhd->pub, TRUE)) != 0) {
+	if ((ret = dhd_bus_init(&dhd->pub, FALSE)) != 0) {
 		DHD_ERROR(("%s, dhd_bus_init failed %d\n", __FUNCTION__, ret));
+		dhd_os_sdunlock(dhdp);
 		return ret;
 	}
 #if defined(OOB_INTR_ONLY)
@@ -2283,6 +2237,7 @@ dhd_bus_start(dhd_pub_t *dhdp)
 		dhd->wd_timer_valid = FALSE;
 		del_timer_sync(&dhd->timer);
 		DHD_ERROR(("%s Host failed to resgister for OOB\n", __FUNCTION__));
+		dhd_os_sdunlock(dhdp);
 		return -ENODEV;
 	}
 
@@ -2295,8 +2250,11 @@ dhd_bus_start(dhd_pub_t *dhdp)
 		dhd->wd_timer_valid = FALSE;
 		del_timer_sync(&dhd->timer);
 		DHD_ERROR(("%s failed bus is not ready\n", __FUNCTION__));
+		dhd_os_sdunlock(dhdp);
 		return -ENODEV;
 	}
+
+	dhd_os_sdunlock(dhdp);
 
 #ifdef EMBEDDED_PLATFORM
 	bcm_mkiovar("event_msgs", dhdp->eventmask, WL_EVENTING_MASK_LEN, iovbuf, sizeof(iovbuf));
@@ -2385,41 +2343,47 @@ static struct net_device_ops dhd_ops_virt = {
 };
 #endif
 
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-static int
-dhd_inetaddr_event(struct notifier_block *this, unsigned long event, void *arg)
+static int dhd_device_event(struct notifier_block *this, unsigned long event,
+				void *ptr)
 {
-	struct in_ifaddr *ifa = (struct in_ifaddr *)arg;
-	struct in_device *in_dev = ifa->ifa_dev;
-	struct net_device *net = in_dev ? in_dev->dev : NULL;
+	struct in_ifaddr *ifa = (struct in_ifaddr *)ptr;
 	dhd_info_t *dhd;
+	dhd_pub_t *dhd_pub;
 
-#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 31))
-	if (!net || net->open != dhd_open) {
+	if (!ifa)
+		return NOTIFY_DONE;
+
+	dhd = *(dhd_info_t **)netdev_priv(ifa->ifa_dev->dev);
+	dhd_pub = &dhd->pub;
+
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 31))
+	if (ifa->ifa_dev->dev->netdev_ops == &dhd_ops_pri) {
 #else
-	if (!net || net->netdev_ops != &dhd_ops_pri) {
+	if (ifa->ifa_dev->dev->open == &dhd_open) {
 #endif
-		/* Not our device */
-		return NOTIFY_DONE;
+		switch (event) {
+		case NETDEV_UP:
+			DHD_TRACE(("%s: [%s] Up IP: 0x%x\n",
+			    __FUNCTION__, ifa->ifa_label, ifa->ifa_address));
+
+			dhd_arp_cleanup(dhd_pub);
+			break;
+
+		case NETDEV_DOWN:
+			DHD_TRACE(("%s: [%s] Down IP: 0x%x\n",
+			    __FUNCTION__, ifa->ifa_label, ifa->ifa_address));
+
+			dhd_arp_cleanup(dhd_pub);
+			break;
+
+		default:
+			DHD_TRACE(("%s: [%s] Event: %lu\n",
+			    __FUNCTION__, ifa->ifa_label, event));
+			break;
+		}
 	}
-
-	if (event != NETDEV_UP || (ifa->ifa_flags & IFA_F_SECONDARY)) {
-		/* Interface is down, or not the primary address; ignore */
-		return NOTIFY_DONE;
-	}
-
-	dhd = *(dhd_info_t **)netdev_priv(net);
-
-	dhd_os_proto_block(&dhd->pub);
-	dhd->in_address = ifa->ifa_address;
-	if (dhd->filter_enabled) {
-		dhd_set_packet_filter(dhd->filter_enabled, &dhd->pub);
-	}
-	dhd_os_proto_unblock(&dhd->pub);
-
 	return NOTIFY_DONE;
 }
-#endif
 
 int
 dhd_net_attach(dhd_pub_t *dhdp, int ifidx)
@@ -2494,6 +2458,7 @@ dhd_net_attach(dhd_pub_t *dhdp, int ifidx)
 	       dhd->pub.mac.octet[0], dhd->pub.mac.octet[1], dhd->pub.mac.octet[2],
 	       dhd->pub.mac.octet[3], dhd->pub.mac.octet[4], dhd->pub.mac.octet[5]);
 
+
 #if defined(CONFIG_WIRELESS_EXT)
 #if defined(CONFIG_FIRST_SCAN)
 #ifdef SOFTAP
@@ -2527,10 +2492,6 @@ dhd_bus_detach(dhd_pub_t *dhdp)
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
-#ifdef CONFIG_BCM4329_ALLOW_ARP
-	unregister_inetaddr_notifier(&dhd_inetaddr_notifier);
-#endif
-
 	if (dhdp) {
 		dhd = (dhd_info_t *)dhdp->info;
 		if (dhd) {
@@ -2562,6 +2523,8 @@ dhd_detach(dhd_pub_t *dhdp)
 		if (dhd) {
 			dhd_if_t *ifp;
 			int i;
+
+			unregister_inetaddr_notifier(&dhd_notifier);
 
 #if defined(CONFIG_HAS_EARLYSUSPEND)
 			if (dhd->early_suspend.suspend)
@@ -2734,7 +2697,7 @@ dhd_os_proto_block(dhd_pub_t *pub)
 	dhd_info_t *dhd = (dhd_info_t *)(pub->info);
 
 	if (dhd) {
-		down(&dhd->proto_sem);
+		mutex_lock(&dhd->proto_sem);
 		return 1;
 	}
 
@@ -2747,7 +2710,7 @@ dhd_os_proto_unblock(dhd_pub_t *pub)
 	dhd_info_t *dhd = (dhd_info_t *)(pub->info);
 
 	if (dhd) {
-		up(&dhd->proto_sem);
+		mutex_unlock(&dhd->proto_sem);
 		return 1;
 	}
 
@@ -2886,7 +2849,7 @@ dhd_os_sdlock(dhd_pub_t *pub)
 	dhd = (dhd_info_t *)(pub->info);
 
 	if (dhd->threads_only)
-		down(&dhd->sdsem);
+		mutex_lock(&dhd->sdsem);
 	else
 		spin_lock_bh(&dhd->sdlock);
 }
@@ -2899,7 +2862,7 @@ dhd_os_sdunlock(dhd_pub_t *pub)
 	dhd = (dhd_info_t *)(pub->info);
 
 	if (dhd->threads_only)
-		up(&dhd->sdsem);
+		mutex_unlock(&dhd->sdsem);
 	else
 		spin_unlock_bh(&dhd->sdlock);
 }
@@ -3150,11 +3113,12 @@ dhd_dev_pno_enable(struct net_device *dev,  int pfn_enabled)
 
 /* Linux wrapper to call common dhd_pno_set */
 int
-dhd_dev_pno_set(struct net_device *dev, wlc_ssid_t* ssids_local, int nssid, ushort  scan_fr)
+dhd_dev_pno_set(struct net_device *dev, wlc_ssid_t* ssids_local, int nssid,
+		ushort scan_fr, int pno_repeat, int pno_freq_expo_max)
 {
 	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(dev);
 
-	return (dhd_pno_set(&dhd->pub, ssids_local, nssid, scan_fr));
+	return (dhd_pno_set(&dhd->pub, ssids_local, nssid, scan_fr, pno_repeat, pno_freq_expo_max));
 }
 
 /* Linux wrapper to get  pno status */
