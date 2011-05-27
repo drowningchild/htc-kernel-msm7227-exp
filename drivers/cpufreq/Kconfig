@@ -61,8 +61,6 @@ choice
 	  This option sets which CPUFreq governor shall be loaded at
 	  startup. If in doubt, select 'performance'.
 
-
-
 config CPU_FREQ_DEFAULT_GOV_PERFORMANCE
 	bool "performance"
 	select CPU_FREQ_GOV_PERFORMANCE
@@ -70,6 +68,7 @@ config CPU_FREQ_DEFAULT_GOV_PERFORMANCE
 	  Use the CPUFreq governor 'performance' as default. This sets
 	  the frequency statically to the highest frequency supported by
 	  the CPU.
+
 config CPU_FREQ_DEFAULT_GOV_INTERACTIVE
 	bool "interactive"
 	select CPU_FREQ_GOV_INTERACTIVE
@@ -155,7 +154,6 @@ config CPU_FREQ_GOV_SMARTASS
 
 	If in doubt, say N.
 
-
 config CPU_FREQ_GOV_POWERSAVE
 	tristate "'powersave' governor"
 	help
@@ -207,8 +205,6 @@ config CPU_FREQ_GOV_ONDEMAND_INPUT
 	help
 	  Enable installation of an input event handler which will ramp up the
 	  CPU to max frequency when an input event is received.
-
-
 
 config CPU_FREQ_GOV_INTERACTIVE
 	tristate "'interactive' cpufreq policy governor"
