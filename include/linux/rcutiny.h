@@ -42,9 +42,7 @@ void __rcu_read_unlock(void);
 extern void call_rcu_sched(struct rcu_head *head,
 			   void (*func)(struct rcu_head *rcu));
 
-static inline void rcu_init(void)
-{
-}
+#define rcu_init_sched()	do { } while (0)
 
 extern void synchronize_sched(void);
 
@@ -181,9 +179,12 @@ static inline void rcu_sched_force_quiescent_state(void)
 }
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
+
 extern int rcu_scheduler_active __read_mostly;
 extern void rcu_scheduler_starting(void);
+
 #else /* #ifdef CONFIG_DEBUG_LOCK_ALLOC */
+
 static inline void rcu_scheduler_starting(void)
 {
 }

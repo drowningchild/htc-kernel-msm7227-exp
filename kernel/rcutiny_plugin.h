@@ -22,8 +22,6 @@
  * Author: Paul E. McKenney <paulmck@linux.vnet.ibm.com>
  */
 
-#include <linux/kthread.h>
-
 #ifdef CONFIG_TINY_PREEMPT_RCU
 
 #include <linux/delay.h>
@@ -170,9 +168,9 @@ static void rcu_preempt_cpu_qs(void)
 	if (!rcu_preempt_blocked_readers_any())
 		rcu_preempt_ctrlblk.rcb.donetail = rcu_preempt_ctrlblk.nexttail;
 
-	/* If there are done callbacks, cause them to be invoked. */
+	/* If there are done callbacks, make RCU_SOFTIRQ process them. */
 	if (*rcu_preempt_ctrlblk.rcb.donetail != NULL)
-		invoke_rcu_cbs();
+		raise_softirq(RCU_SOFTIRQ);
 }
 
 /*
@@ -378,14 +376,14 @@ static void rcu_preempt_check_callbacks(void)
 		rcu_preempt_cpu_qs();
 	if (&rcu_preempt_ctrlblk.rcb.rcucblist !=
 	    rcu_preempt_ctrlblk.rcb.donetail)
-		invoke_rcu_cbs();
+		raise_softirq(RCU_SOFTIRQ);
 	if (rcu_preempt_gp_in_progress() && rcu_preempt_running_reader())
 		t->rcu_read_unlock_special |= RCU_READ_UNLOCK_NEED_QS;
 }
 
 /*
  * TINY_PREEMPT_RCU has an extra callback-list tail pointer to
- * update, so this is invoked from rcu_process_callbacks() to
+ * update, so this is invoked from __rcu_process_callbacks() to
  * handle that case.  Of course, it is invoked for all flavors of
  * RCU, but RCU callbacks can appear only on one of the lists, and
  * neither ->nexttail nor ->donetail can possibly be NULL, so there
@@ -402,7 +400,7 @@ static void rcu_preempt_remove_callbacks(struct rcu_ctrlblk *rcp)
  */
 static void rcu_preempt_process_callbacks(void)
 {
-	rcu_process_callbacks(&rcu_preempt_ctrlblk.rcb);
+	__rcu_process_callbacks(&rcu_preempt_ctrlblk.rcb);
 }
 
 /*
@@ -601,13 +599,14 @@ static void rcu_preempt_process_callbacks(void)
 #endif /* #else #ifdef CONFIG_TINY_PREEMPT_RCU */
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
+
 #include <linux/kernel_stat.h>
 
 /*
  * During boot, we forgive RCU lockdep issues.  After this function is
  * invoked, we start taking RCU lockdep issues seriously.
  */
-void __init rcu_scheduler_starting(void)
+void rcu_scheduler_starting(void)
 {
 	WARN_ON(nr_context_switches() > 0);
 	rcu_scheduler_active = 1;
