@@ -59,14 +59,6 @@ int rcu_scheduler_active __read_mostly;
 EXPORT_SYMBOL_GPL(rcu_scheduler_active);
 #endif /* #ifdef CONFIG_DEBUG_LOCK_ALLOC */
 
-/* Forward declarations for rcutiny_plugin.h. */
-static void __rcu_process_callbacks(struct rcu_ctrlblk *rcp);
-static void __call_rcu(struct rcu_head *head,
-		       void (*func)(struct rcu_head *rcu),
-		       struct rcu_ctrlblk *rcp);
-
-#include "rcutiny_plugin.h"
-
 #ifdef CONFIG_NO_HZ
 
 static long rcu_dynticks_nesting = 1;
@@ -148,7 +140,6 @@ void rcu_check_callbacks(int cpu, int user)
 		rcu_sched_qs(cpu);
 	else if (!in_softirq())
 		rcu_bh_qs(cpu);
-	rcu_preempt_check_callbacks();
 }
 
 /*
@@ -171,7 +162,6 @@ static void __rcu_process_callbacks(struct rcu_ctrlblk *rcp)
 	*rcp->donetail = NULL;
 	if (rcp->curtail == rcp->donetail)
 		rcp->curtail = &rcp->rcucblist;
-	rcu_preempt_remove_callbacks(rcp);
 	rcp->donetail = &rcp->rcucblist;
 	local_irq_restore(flags);
 
@@ -192,7 +182,6 @@ static void rcu_process_callbacks(struct softirq_action *unused)
 {
 	__rcu_process_callbacks(&rcu_sched_ctrlblk);
 	__rcu_process_callbacks(&rcu_bh_ctrlblk);
-	rcu_preempt_process_callbacks();
 }
 
 /*
@@ -234,15 +223,15 @@ static void __call_rcu(struct rcu_head *head,
 }
 
 /*
- * Post an RCU callback to be invoked after the end of an RCU-sched grace
+ * Post an RCU callback to be invoked after the end of an RCU grace
  * period.  But since we have but one CPU, that would be after any
  * quiescent state.
  */
-void call_rcu_sched(struct rcu_head *head, void (*func)(struct rcu_head *rcu))
+void call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *rcu))
 {
 	__call_rcu(head, func, &rcu_sched_ctrlblk);
 }
-EXPORT_SYMBOL_GPL(call_rcu_sched);
+EXPORT_SYMBOL_GPL(call_rcu);
 
 /*
  * Post an RCU bottom-half callback to be invoked after any subsequent
@@ -253,6 +242,20 @@ void call_rcu_bh(struct rcu_head *head, void (*func)(struct rcu_head *rcu))
 	__call_rcu(head, func, &rcu_bh_ctrlblk);
 }
 EXPORT_SYMBOL_GPL(call_rcu_bh);
+
+void rcu_barrier(void)
+{
+	struct rcu_synchronize rcu;
+
+	init_rcu_head_on_stack(&rcu.head);
+	init_completion(&rcu.completion);
+	/* Will wake me after RCU finished. */
+	call_rcu(&rcu.head, wakeme_after_rcu);
+	/* Wait for it. */
+	wait_for_completion(&rcu.completion);
+	destroy_rcu_head_on_stack(&rcu.head);
+}
+EXPORT_SYMBOL_GPL(rcu_barrier);
 
 void rcu_barrier_bh(void)
 {
@@ -286,3 +289,5 @@ void __init rcu_init(void)
 {
 	open_softirq(RCU_SOFTIRQ, rcu_process_callbacks);
 }
+
+#include "rcutiny_plugin.h"
