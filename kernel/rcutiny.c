@@ -36,16 +36,38 @@
 #include <linux/time.h>
 #include <linux/cpu.h>
 
-/* Controls for rcu_kthread() kthread, replacing RCU_SOFTIRQ used previously. */
-static struct task_struct *rcu_kthread_task;
-static DECLARE_WAIT_QUEUE_HEAD(rcu_kthread_wq);
-static unsigned long have_rcu_kthread_work;
-static void invoke_rcu_kthread(void);
+/* Global control variables for rcupdate callback mechanism. */
+struct rcu_ctrlblk {
+	struct rcu_head *rcucblist;	/* List of pending callbacks (CBs). */
+	struct rcu_head **donetail;	/* ->next pointer of last "done" CB. */
+	struct rcu_head **curtail;	/* ->next pointer of last CB. */
+};
+
+/* Definition for rcupdate control block. */
+static struct rcu_ctrlblk rcu_sched_ctrlblk = {
+	.donetail	= &rcu_sched_ctrlblk.rcucblist,
+	.curtail	= &rcu_sched_ctrlblk.rcucblist,
+};
+
+static struct rcu_ctrlblk rcu_bh_ctrlblk = {
+	.donetail	= &rcu_bh_ctrlblk.rcucblist,
+	.curtail	= &rcu_bh_ctrlblk.rcucblist,
+};
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+int rcu_scheduler_active __read_mostly;
+EXPORT_SYMBOL_GPL(rcu_scheduler_active);
+#endif /* #ifdef CONFIG_DEBUG_LOCK_ALLOC */
+
+/* Controls for rcu_cbs() kthread, replacing RCU_SOFTIRQ used previously. */
+static struct task_struct *rcu_cbs_task;
+static DECLARE_WAIT_QUEUE_HEAD(rcu_cbs_wq);
+static unsigned long have_rcu_cbs;
+static void invoke_rcu_cbs(void);
 
 /* Forward declarations for rcutiny_plugin.h. */
-struct rcu_ctrlblk;
 static void rcu_process_callbacks(struct rcu_ctrlblk *rcp);
-static int rcu_kthread(void *arg);
+static int rcu_cbs(void *arg);
 static void __call_rcu(struct rcu_head *head,
 		       void (*func)(struct rcu_head *rcu),
 		       struct rcu_ctrlblk *rcp);
@@ -108,7 +130,7 @@ void rcu_sched_qs(int cpu)
 {
 	if (rcu_qsctr_help(&rcu_sched_ctrlblk) +
 	    rcu_qsctr_help(&rcu_bh_ctrlblk))
-		invoke_rcu_kthread();
+		invoke_rcu_cbs();
 }
 
 /*
@@ -117,7 +139,7 @@ void rcu_sched_qs(int cpu)
 void rcu_bh_qs(int cpu)
 {
 	if (rcu_qsctr_help(&rcu_bh_ctrlblk))
-		invoke_rcu_kthread();
+		invoke_rcu_cbs();
 }
 
 /*
@@ -179,41 +201,37 @@ static void rcu_process_callbacks(struct rcu_ctrlblk *rcp)
  * This is a kthread, but it is never stopped, at least not until
  * the system goes down.
  */
-static int rcu_kthread(void *arg)
+static int rcu_cbs(void *arg)
 {
 	unsigned long work;
-	unsigned long morework;
 	unsigned long flags;
 
 	for (;;) {
-		wait_event(rcu_kthread_wq, have_rcu_kthread_work != 0);
-		morework = rcu_boost();
+		wait_event(rcu_cbs_wq, have_rcu_cbs != 0);
 		local_irq_save(flags);
-		work = have_rcu_kthread_work;
-		have_rcu_kthread_work = morework;
+		work = have_rcu_cbs;
+		have_rcu_cbs = 0;
 		local_irq_restore(flags);
 		if (work) {
 			rcu_process_callbacks(&rcu_sched_ctrlblk);
 			rcu_process_callbacks(&rcu_bh_ctrlblk);
 			rcu_preempt_process_callbacks();
 		}
-		schedule_timeout_interruptible(1); /* Leave CPU for others. */
 	}
 
 	return 0;  /* Not reached, but needed to shut gcc up. */
 }
 
 /*
- * Wake up rcu_kthread() to process callbacks now eligible for invocation
- * or to boost readers.
+ * Wake up rcu_cbs() to process callbacks now eligible for invocation.
  */
-static void invoke_rcu_kthread(void)
+static void invoke_rcu_cbs(void)
 {
 	unsigned long flags;
 
 	local_irq_save(flags);
-	have_rcu_kthread_work = 1;
-	wake_up(&rcu_kthread_wq);
+	have_rcu_cbs = 1;
+	wake_up(&rcu_cbs_wq);
 	local_irq_restore(flags);
 }
 
@@ -309,11 +327,7 @@ EXPORT_SYMBOL_GPL(rcu_barrier_sched);
  */
 static int __init rcu_spawn_kthreads(void)
 {
-	struct sched_param sp;
-
-	rcu_kthread_task = kthread_run(rcu_kthread, NULL, "rcu_kthread");
-	sp.sched_priority = RCU_BOOST_PRIO;
-	sched_setscheduler_nocheck(rcu_kthread_task, SCHED_FIFO, &sp);
+	rcu_cbs_task = kthread_run(rcu_cbs, NULL, "rcu_cbs");
 	return 0;
 }
 early_initcall(rcu_spawn_kthreads);
