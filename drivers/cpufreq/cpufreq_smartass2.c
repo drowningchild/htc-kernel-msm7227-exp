@@ -69,7 +69,7 @@ static unsigned long down_rate_us;
  * When ramping up frequency with no idle cycles jump to at least this frequency.
  * Zero disables. Set a very high value to jump to policy max freqeuncy.
  */
-#define DEFAULT_UP_MIN_FREQ 768000
+#define DEFAULT_UP_MIN_FREQ 883200
 static unsigned int up_min_freq;
 
 /*
@@ -78,7 +78,7 @@ static unsigned int up_min_freq;
  * to minimize wakeup issues.
  * Set sleep_max_freq=0 to disable this behavior.
  */
-#define DEFAULT_SLEEP_MAX_FREQ 320000
+#define DEFAULT_SLEEP_MAX_FREQ 499200
 static unsigned int sleep_max_freq;
 
 /*
@@ -492,9 +492,9 @@ static int cpufreq_governor_smartass2(struct cpufreq_policy *new_policy,
 		pm_idle = cpufreq_idle;
 
 		this_smartass2->cur_policy = new_policy;
-		this_smartass2->cur_policy->max = CONFIG_MSM_CPU_FREQ_ONDEMAND_MAX;
-		this_smartass2->cur_policy->min = CONFIG_MSM_CPU_FREQ_ONDEMAND_MIN;
-		this_smartass2->cur_policy->cur = CONFIG_MSM_CPU_FREQ_ONDEMAND_MAX;
+		this_smartass2->cur_policy->max = CONFIG_MSM_CPU_FREQ_MAX;
+		this_smartass2->cur_policy->min = CONFIG_MSM_CPU_FREQ_MIN;
+		this_smartass2->cur_policy->cur = CONFIG_MSM_CPU_FREQ_MAX;
 		this_smartass2->enable = 1;
 
 		// notice no break here!
