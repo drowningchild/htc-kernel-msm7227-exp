@@ -28,11 +28,8 @@
 #include <linux/cpu.h>
 #include <linux/completion.h>
 #include <linux/mutex.h>
-<<<<<<< HEAD
-=======
 #include <linux/sched.h>
 #include <linux/syscore_ops.h>
->>>>>>> 024e01e... ADD: CPUFREQ code from 3.0rc6 kernel (by Imoseyon) - modified by LorD ClockaN
 
 #include <trace/events/power.h>
 
